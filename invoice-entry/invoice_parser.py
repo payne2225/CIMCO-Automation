@@ -33,26 +33,25 @@ OUTLOOK_FOLDER = "CBS Invoices"
 # ── PDF extraction via Claude ─────────────────────────────────────────────────
 
 EXTRACT_PROMPT = """\
-Look at this document and return a JSON object with the following fields.
+Look at this document and return a JSON ARRAY.
 
-First, determine what type of document this is:
-- "invoice" = a bill requesting payment for specific goods/services
-- "statement" = a summary of account activity or balance over a period
-- "other" = anything else
+If the document is a statement, account summary, or anything that is NOT an invoice, return:
+[{"document_type":"statement"}]
 
-If the document type is NOT "invoice", return only:
-{"document_type": "statement"}
+If the document contains one or more invoices (even across multiple pages), return one object per invoice:
+[
+  {"document_type":"invoice","vendor_name":"...","po_number":"...","invoice_number":"...","invoice_date":"...","invoice_total":"..."},
+  {"document_type":"invoice","vendor_name":"...","po_number":"...","invoice_number":"...","invoice_date":"...","invoice_total":"..."}
+]
 
-If it IS an invoice, extract these fields:
-- document_type: "invoice"
+Field definitions:
 - vendor_name: Company name of who is billing (not the recipient)
 - po_number: The PO number, job number, or order reference field, exactly as printed
 - invoice_number: The invoice number or invoice ID
 - invoice_date: Invoice date in MM/DD/YY format
 - invoice_total: The final total amount owed as a plain number (no $ or commas)
 
-Return ONLY valid JSON, no explanation. Example:
-{"document_type":"invoice","vendor_name":"ABC Supply","po_number":"CP26006-17","invoice_number":"18366029-00","invoice_date":"4/13/26","invoice_total":"83.48"}
+Return ONLY a valid JSON array, no explanation.
 """
 
 def extract_from_pdf(pdf_path, client):
@@ -61,7 +60,7 @@ def extract_from_pdf(pdf_path, client):
 
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=300,
+        max_tokens=1024,
         messages=[{
             "role": "user",
             "content": [
@@ -85,7 +84,8 @@ def extract_from_pdf(pdf_path, client):
     raw = response.content[0].text.strip()
     raw = re.sub(r"^```[a-z]*\n?", "", raw)
     raw = re.sub(r"\n?```$", "", raw)
-    return json.loads(raw)
+    result = json.loads(raw)
+    return result if isinstance(result, list) else [result]
 
 
 # ── Outlook integration (Windows only) ───────────────────────────────────────
@@ -226,30 +226,33 @@ def process_pdfs(pdf_entries, client):
     for pdf_path, display_name in pdf_entries:
         print(f"  Processing: {display_name} ...", end=" ", flush=True)
         try:
-            data = extract_from_pdf(pdf_path, client)
+            items = extract_from_pdf(pdf_path, client)
+            invoices = [i for i in items if i.get("document_type") == "invoice"]
 
-            if data.get("document_type") != "invoice":
+            if not invoices:
                 print("SKIPPED (statement)")
                 continue
 
-            po_raw = data.get("po_number", "")
+            date_parsed = datetime.now().strftime("%m/%d/%y %I:%M %p")
+            for inv in invoices:
+                total = inv.get("invoice_total", "")
+                try:
+                    total = float(str(total).replace(",", ""))
+                except (ValueError, AttributeError):
+                    pass
 
-            total = data.get("invoice_total", "")
-            try:
-                total = float(str(total).replace(",", ""))
-            except (ValueError, AttributeError):
-                pass
+                rows.append([
+                    inv.get("vendor_name", ""),
+                    inv.get("po_number", ""),
+                    inv.get("invoice_number", ""),
+                    inv.get("invoice_date", ""),
+                    total,
+                    display_name,
+                    date_parsed,
+                ])
 
-            rows.append([
-                data.get("vendor_name", ""),
-                po_raw,
-                data.get("invoice_number", ""),
-                data.get("invoice_date", ""),
-                total,
-                display_name,
-                datetime.now().strftime("%m/%d/%y %I:%M %p"),
-            ])
-            print("OK")
+            count = len(invoices)
+            print(f"OK ({count} invoice{'s' if count > 1 else ''})")
         except Exception as e:
             print(f"FAILED ({e})")
             errors.append((display_name, str(e)))
