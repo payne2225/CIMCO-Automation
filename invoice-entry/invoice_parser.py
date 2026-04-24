@@ -287,7 +287,7 @@ def main():
     if outlook_mode:
         temp_dir, email_results = get_pdfs_from_outlook()
         pdf_entries = [(path, fname) for path, fname in email_results]
-        output_dir = Path(r"C:\Users\NathanPayne.DESKTOP-UAVOJRP\OneDrive - MIRC Construction Services\Documents\1. CIMCO Legal Docs\Invoice Lists")
+        output_dir = Path(r"C:\Users\NathanPayne.DESKTOP-UAVOJRP\OneDrive - MIRC Construction Services\Documents\3. CBS Legal Docs\AP Parser")
         output_dir.mkdir(parents=True, exist_ok=True)
     else:
         folder = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
